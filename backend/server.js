@@ -7,16 +7,16 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:8000', 'http://127.0.0.1:8000'],
+    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5500', 'http://127.0.0.1:5500'],
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
 
-const dataPath = path.join(__dirname, 'data', 'tickets.json');
-
 const dataDir = path.join(__dirname, 'data');
+const dataPath = path.join(dataDir, 'tickets.json');
+
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
     console.log('Папка data создана');
@@ -32,7 +32,7 @@ const readTickets = () => {
         const data = fs.readFileSync(dataPath, 'utf8');
         return JSON.parse(data);
     } catch (error) {
-        console.error('Ошибка чтения файла:', error);
+        console.error('Ошибка чтения файла:', error.message);
         return [];
     }
 };
@@ -42,7 +42,7 @@ const writeTickets = (tickets) => {
         fs.writeFileSync(dataPath, JSON.stringify(tickets, null, 2));
         return true;
     } catch (error) {
-        console.error('Ошибка записи файла:', error);
+        console.error('Ошибка записи файла:', error.message);
         return false;
     }
 };
@@ -50,6 +50,7 @@ const writeTickets = (tickets) => {
 app.get('/api/tickets', (req, res) => {
     try {
         const tickets = readTickets();
+        console.log(`GET /api/tickets - возвращено ${tickets.length} заявок`);
         res.json(tickets);
     } catch (error) {
         console.error('GET error:', error);
@@ -66,6 +67,7 @@ app.get('/api/tickets/:id', (req, res) => {
             return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
+        console.log(`GET /api/tickets/${req.params.id} - найдено`);
         res.json(ticket);
     } catch (error) {
         console.error('GET by id error:', error);
@@ -75,9 +77,9 @@ app.get('/api/tickets/:id', (req, res) => {
 
 app.post('/api/tickets', (req, res) => {
     try {
-        const { title, description, priority } = req.body;
+        const { id, title, description, priority } = req.body;
         
-        console.log('POST запрос:', { title, description, priority });
+        console.log('POST запрос:', { id, title: title?.substring(0, 30), priority });
         
         if (!title || title.trim().length < 3) {
             return res.status(400).json({ error: 'Название должно содержать минимум 3 символа' });
@@ -88,28 +90,46 @@ app.post('/api/tickets', (req, res) => {
         }
         
         const validPriorities = ['low', 'medium', 'high'];
-        if (!validPriorities.includes(priority)) {
+        if (!priority || !validPriorities.includes(priority)) {
             return res.status(400).json({ error: 'Неверный приоритет' });
         }
         
         const tickets = readTickets();
+        const existingIndex = tickets.findIndex(t => t.id === id);
         
-        const newTicket = {
-            id: Date.now().toString(),
-            title: title.trim(),
-            description: description.trim(),
-            priority,
-            status: 'new',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            synced: true
-        };
+        let newTicket;
         
-        tickets.push(newTicket);
-        writeTickets(tickets);
+        if (existingIndex !== -1 && id) {
+            newTicket = {
+                ...tickets[existingIndex],
+                title: title.trim(),
+                description: description.trim(),
+                priority: priority,
+                updatedAt: new Date().toISOString(),
+                synced: true
+            };
+            tickets[existingIndex] = newTicket;
+            writeTickets(tickets);
+            console.log(`Обновлена существующая заявка: ${id}`);
+            return res.status(200).json(newTicket);
+        } else {
+            const newId = id || Date.now().toString();
+            newTicket = {
+                id: newId,
+                title: title.trim(),
+                description: description.trim(),
+                priority: priority,
+                status: 'new',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                synced: true
+            };
+            tickets.push(newTicket);
+            writeTickets(tickets);
+            console.log(`Создана новая заявка: ${newId}`);
+            return res.status(201).json(newTicket);
+        }
         
-        console.log('Создана заявка:', newTicket.id);
-        res.status(201).json(newTicket);
     } catch (error) {
         console.error('POST error:', error);
         res.status(500).json({ error: 'Ошибка при создании заявки' });
@@ -149,7 +169,7 @@ app.patch('/api/tickets/:id', (req, res) => {
         tickets[index] = updatedTicket;
         writeTickets(tickets);
         
-        console.log('Обновлена заявка:', req.params.id);
+        console.log(`PATCH /api/tickets/${req.params.id} - обновлено`);
         res.json(updatedTicket);
     } catch (error) {
         console.error('PATCH error:', error);
@@ -167,7 +187,7 @@ app.delete('/api/tickets/:id', (req, res) => {
         }
         
         writeTickets(filtered);
-        console.log('Удалена заявка:', req.params.id);
+        console.log(`DELETE /api/tickets/${req.params.id} - удалено`);
         res.status(204).send();
     } catch (error) {
         console.error('DELETE error:', error);
@@ -179,7 +199,7 @@ app.post('/api/sync', (req, res) => {
     try {
         const { tickets: ticketsToSync } = req.body;
         
-        console.log('Sync запрос, заявок:', ticketsToSync?.length || 0);
+        console.log(`Sync запрос, получено ${ticketsToSync?.length || 0} заявок`);
         
         if (!Array.isArray(ticketsToSync)) {
             return res.status(400).json({ error: 'Неверный формат данных' });
@@ -196,19 +216,26 @@ app.post('/api/sync', (req, res) => {
                     synced: true,
                     updatedAt: new Date().toISOString()
                 });
-                console.log('Добавлена новая заявка при синхронизации:', localTicket.id);
+                console.log(`Добавлена новая заявка: ${localTicket.id}`);
             } else if (localTicket.updatedAt > existingTickets[existingIndex].updatedAt) {
                 existingTickets[existingIndex] = {
                     ...localTicket,
                     synced: true,
                     updatedAt: new Date().toISOString()
                 };
-                console.log('Обновлена заявка при синхронизации:', localTicket.id);
+                console.log(`Обновлена заявка: ${localTicket.id}`);
+            } else {
+                console.log(`Пропущена (сервер новее): ${localTicket.id}`);
             }
         }
         
-        writeTickets(existingTickets);
+        const success = writeTickets(existingTickets);
         
+        if (!success) {
+            return res.status(500).json({ error: 'Ошибка при сохранении данных' });
+        }
+        
+        console.log(`Синхронизация завершена, всего заявок: ${existingTickets.length}`);
         res.json(existingTickets);
     } catch (error) {
         console.error('Sync error:', error);
@@ -220,10 +247,34 @@ app.options('/api/*', (req, res) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type');
-    res.sendStatus(200);
+    res.status(200).send();
+});
+
+app.get('/', (req, res) => {
+    res.json({
+        status: 'ok',
+        message: 'Сервер заявок работает',
+        endpoints: [
+            'GET  /api/tickets',
+            'GET  /api/tickets/:id',
+            'POST /api/tickets',
+            'PATCH /api/tickets/:id',
+            'DELETE /api/tickets/:id',
+            'POST /api/sync'
+        ]
+    });
 });
 
 app.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
-    console.log(`API доступно по адресу: http://localhost:${PORT}/api/tickets`);
+    console.log('');
+    console.log('СЕРВЕР ЗАЯВОК ЗАПУЩЕН');
+    console.log('');
+    console.log(`Порт: ${PORT}`);
+    console.log(`API: http://localhost:${PORT}/api/tickets`);
+    console.log(`Данные: ${dataPath}`);
+    console.log('');
+    
+    const tickets = readTickets();
+    console.log(`Текущее количество заявок: ${tickets.length}`);
+    console.log('');
 });
