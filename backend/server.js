@@ -4,45 +4,54 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = 3001;
 
-app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5500', 'http://127.0.0.1:5500'],
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type']
-}));
+app.use(cors());
 app.use(express.json());
 
+const frontendPath = path.join(__dirname, '..', 'frontend');
+
+if (!fs.existsSync(frontendPath)) {
+    console.error('Frontend folder not found:', frontendPath);
+} else {
+    app.use(express.static(frontendPath));
+}
+
 const dataDir = path.join(__dirname, 'data');
-const dataPath = path.join(dataDir, 'tickets.json');
+const dataFile = path.join(dataDir, 'tickets.json');
 
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
-    console.log('Папка data создана');
-}
-
-if (!fs.existsSync(dataPath)) {
-    fs.writeFileSync(dataPath, JSON.stringify([], null, 2));
-    console.log('Файл tickets.json создан');
 }
 
 const readTickets = () => {
     try {
-        const data = fs.readFileSync(dataPath, 'utf8');
+        if (!fs.existsSync(dataFile)) {
+            fs.writeFileSync(dataFile, JSON.stringify([], null, 2));
+            return [];
+        }
+        
+        const data = fs.readFileSync(dataFile, 'utf8');
+        
+        if (!data || data.trim() === '') {
+            fs.writeFileSync(dataFile, JSON.stringify([], null, 2));
+            return [];
+        }
+        
         return JSON.parse(data);
     } catch (error) {
-        console.error('Ошибка чтения файла:', error.message);
+        console.error('Read error:', error.message);
+        fs.writeFileSync(dataFile, JSON.stringify([], null, 2));
         return [];
     }
 };
 
 const writeTickets = (tickets) => {
     try {
-        fs.writeFileSync(dataPath, JSON.stringify(tickets, null, 2));
+        fs.writeFileSync(dataFile, JSON.stringify(tickets, null, 2));
         return true;
     } catch (error) {
-        console.error('Ошибка записи файла:', error.message);
+        console.error('Write error:', error.message);
         return false;
     }
 };
@@ -50,11 +59,9 @@ const writeTickets = (tickets) => {
 app.get('/api/tickets', (req, res) => {
     try {
         const tickets = readTickets();
-        console.log(`GET /api/tickets - возвращено ${tickets.length} заявок`);
         res.json(tickets);
     } catch (error) {
-        console.error('GET error:', error);
-        res.status(500).json({ error: 'Ошибка при чтении заявок' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -64,116 +71,77 @@ app.get('/api/tickets/:id', (req, res) => {
         const ticket = tickets.find(t => t.id === req.params.id);
         
         if (!ticket) {
-            return res.status(404).json({ error: 'Заявка не найдена' });
+            return res.status(404).json({ error: 'Ticket not found' });
         }
         
-        console.log(`GET /api/tickets/${req.params.id} - найдено`);
         res.json(ticket);
     } catch (error) {
-        console.error('GET by id error:', error);
-        res.status(500).json({ error: 'Ошибка при чтении заявки' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
 app.post('/api/tickets', (req, res) => {
     try {
-        const { id, title, description, priority } = req.body;
-        
-        console.log('POST запрос:', { id, title: title?.substring(0, 30), priority });
+        const { title, description, priority } = req.body;
         
         if (!title || title.trim().length < 3) {
-            return res.status(400).json({ error: 'Название должно содержать минимум 3 символа' });
+            return res.status(400).json({ error: 'Title must be at least 3 characters' });
         }
         
         if (!description || description.trim().length < 10) {
-            return res.status(400).json({ error: 'Описание должно содержать минимум 10 символов' });
+            return res.status(400).json({ error: 'Description must be at least 10 characters' });
         }
         
-        const validPriorities = ['low', 'medium', 'high'];
-        if (!priority || !validPriorities.includes(priority)) {
-            return res.status(400).json({ error: 'Неверный приоритет' });
+        if (!priority || !['low', 'medium', 'high'].includes(priority)) {
+            return res.status(400).json({ error: 'Invalid priority' });
         }
         
         const tickets = readTickets();
-        const existingIndex = tickets.findIndex(t => t.id === id);
         
-        let newTicket;
+        const newTicket = {
+            id: Date.now().toString(),
+            title: title.trim(),
+            description: description.trim(),
+            priority,
+            status: 'new',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
         
-        if (existingIndex !== -1 && id) {
-            newTicket = {
-                ...tickets[existingIndex],
-                title: title.trim(),
-                description: description.trim(),
-                priority: priority,
-                updatedAt: new Date().toISOString(),
-                synced: true
-            };
-            tickets[existingIndex] = newTicket;
-            writeTickets(tickets);
-            console.log(`Обновлена существующая заявка: ${id}`);
-            return res.status(200).json(newTicket);
-        } else {
-            const newId = id || Date.now().toString();
-            newTicket = {
-                id: newId,
-                title: title.trim(),
-                description: description.trim(),
-                priority: priority,
-                status: 'new',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                synced: true
-            };
-            tickets.push(newTicket);
-            writeTickets(tickets);
-            console.log(`Создана новая заявка: ${newId}`);
-            return res.status(201).json(newTicket);
-        }
+        tickets.push(newTicket);
+        writeTickets(tickets);
         
+        res.status(201).json(newTicket);
     } catch (error) {
-        console.error('POST error:', error);
-        res.status(500).json({ error: 'Ошибка при создании заявки' });
+        res.status(500).json({ error: 'Error creating ticket' });
     }
 });
 
 app.patch('/api/tickets/:id', (req, res) => {
     try {
+        const { status, title, description, priority } = req.body;
         const tickets = readTickets();
         const index = tickets.findIndex(t => t.id === req.params.id);
         
         if (index === -1) {
-            return res.status(404).json({ error: 'Заявка не найдена' });
+            return res.status(404).json({ error: 'Ticket not found' });
         }
         
-        const { status, title, description, priority } = req.body;
-        
-        const validStatuses = ['new', 'in_progress', 'completed'];
-        if (status && !validStatuses.includes(status)) {
-            return res.status(400).json({ error: 'Неверный статус' });
+        if (status && !['new', 'in_progress', 'completed'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
         }
         
-        if (title && title.trim().length < 3) {
-            return res.status(400).json({ error: 'Название должно содержать минимум 3 символа' });
-        }
+        if (title && title.trim().length >= 3) tickets[index].title = title.trim();
+        if (description && description.trim().length >= 10) tickets[index].description = description.trim();
+        if (priority && ['low', 'medium', 'high'].includes(priority)) tickets[index].priority = priority;
+        if (status) tickets[index].status = status;
         
-        const updatedTicket = {
-            ...tickets[index],
-            ...(title && { title: title.trim() }),
-            ...(description && { description: description.trim() }),
-            ...(priority && { priority }),
-            ...(status && { status }),
-            updatedAt: new Date().toISOString(),
-            synced: true
-        };
+        tickets[index].updatedAt = new Date().toISOString();
         
-        tickets[index] = updatedTicket;
         writeTickets(tickets);
-        
-        console.log(`PATCH /api/tickets/${req.params.id} - обновлено`);
-        res.json(updatedTicket);
+        res.json(tickets[index]);
     } catch (error) {
-        console.error('PATCH error:', error);
-        res.status(500).json({ error: 'Ошибка при обновлении заявки' });
+        res.status(500).json({ error: 'Error updating ticket' });
     }
 });
 
@@ -183,98 +151,35 @@ app.delete('/api/tickets/:id', (req, res) => {
         const filtered = tickets.filter(t => t.id !== req.params.id);
         
         if (filtered.length === tickets.length) {
-            return res.status(404).json({ error: 'Заявка не найдена' });
+            return res.status(404).json({ error: 'Ticket not found' });
         }
         
         writeTickets(filtered);
-        console.log(`DELETE /api/tickets/${req.params.id} - удалено`);
         res.status(204).send();
     } catch (error) {
-        console.error('DELETE error:', error);
-        res.status(500).json({ error: 'Ошибка при удалении заявки' });
+        res.status(500).json({ error: 'Error deleting ticket' });
     }
 });
 
-app.post('/api/sync', (req, res) => {
-    try {
-        const { tickets: ticketsToSync } = req.body;
-        
-        console.log(`Sync запрос, получено ${ticketsToSync?.length || 0} заявок`);
-        
-        if (!Array.isArray(ticketsToSync)) {
-            return res.status(400).json({ error: 'Неверный формат данных' });
-        }
-        
-        const existingTickets = readTickets();
-        
-        for (const localTicket of ticketsToSync) {
-            const existingIndex = existingTickets.findIndex(t => t.id === localTicket.id);
-            
-            if (existingIndex === -1) {
-                existingTickets.push({
-                    ...localTicket,
-                    synced: true,
-                    updatedAt: new Date().toISOString()
-                });
-                console.log(`Добавлена новая заявка: ${localTicket.id}`);
-            } else if (localTicket.updatedAt > existingTickets[existingIndex].updatedAt) {
-                existingTickets[existingIndex] = {
-                    ...localTicket,
-                    synced: true,
-                    updatedAt: new Date().toISOString()
-                };
-                console.log(`Обновлена заявка: ${localTicket.id}`);
-            } else {
-                console.log(`Пропущена (сервер новее): ${localTicket.id}`);
-            }
-        }
-        
-        const success = writeTickets(existingTickets);
-        
-        if (!success) {
-            return res.status(500).json({ error: 'Ошибка при сохранении данных' });
-        }
-        
-        console.log(`Синхронизация завершена, всего заявок: ${existingTickets.length}`);
-        res.json(existingTickets);
-    } catch (error) {
-        console.error('Sync error:', error);
-        res.status(500).json({ error: 'Ошибка при синхронизации' });
+app.head('/api/tickets', (req, res) => {
+    res.status(200).end();
+});
+
+app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
     }
-});
-
-app.options('/api/*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-    res.status(200).send();
-});
-
-app.get('/', (req, res) => {
-    res.json({
-        status: 'ok',
-        message: 'Сервер заявок работает',
-        endpoints: [
-            'GET  /api/tickets',
-            'GET  /api/tickets/:id',
-            'POST /api/tickets',
-            'PATCH /api/tickets/:id',
-            'DELETE /api/tickets/:id',
-            'POST /api/sync'
-        ]
-    });
+    
+    const indexPath = path.join(frontendPath, 'index.html');
+    
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(404).send('index.html not found');
+    }
 });
 
 app.listen(PORT, () => {
-    console.log('');
-    console.log('СЕРВЕР ЗАЯВОК ЗАПУЩЕН');
-    console.log('');
-    console.log(`Порт: ${PORT}`);
-    console.log(`API: http://localhost:${PORT}/api/tickets`);
-    console.log(`Данные: ${dataPath}`);
-    console.log('');
-    
-    const tickets = readTickets();
-    console.log(`Текущее количество заявок: ${tickets.length}`);
-    console.log('');
+    console.log(`Server running on port ${PORT}`);
+    console.log(`http://localhost:${PORT}`);
 });
