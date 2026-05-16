@@ -3,57 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Выездной специалист - Заявки</title>
+    <title>Мои заявки</title>
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
-    <link rel="icon" type="image/png" href="icon.png">
-    <link rel="apple-touch-icon" href="icon.png">
-    <meta name="theme-color" content="#4F46E5">
+    <meta name="theme-color" content="#6366F1">
 </head>
 <body>
     <div class="app">
         <header class="header">
-            <div class="header-content">
-                <h1>Заявки</h1>
-                <div class="status-indicator" id="statusIndicator">
-                    <span class="status-dot offline"></span>
-                    <span class="status-text">Офлайн</span>
+            <div class="container">
+                <div class="header-content">
+                    <div class="logo">
+                        <span class="logo-icon"></span>
+                        <h1>Мои заявки</h1>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span class="status-text" id="statusText">Проверка...</span>
+                    </div>
                 </div>
             </div>
         </header>
 
         <main class="main">
-            <div class="toolbar">
-                <div class="filters">
-                    <select id="statusFilter" class="filter-select">
-                        <option value="all">Все статусы</option>
-                        <option value="new">Новые</option>
-                        <option value="in_progress">В работе</option>
-                        <option value="completed">Завершенные</option>
-                    </select>
+            <div class="container">
+                <div class="toolbar">
+                    <div class="filters">
+                        <select id="statusFilter" class="filter-select">
+                            <option value="all">Все статусы</option>
+                            <option value="new">Новые</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="completed">Завершённые</option>
+                        </select>
+                        
+                        <select id="priorityFilter" class="filter-select">
+                            <option value="all">Все приоритеты</option>
+                            <option value="high">Высокий</option>
+                            <option value="medium">Средний</option>
+                            <option value="low">Низкий</option>
+                        </select>
+                    </div>
                     
-                    <select id="priorityFilter" class="filter-select">
-                        <option value="all">Все приоритеты</option>
-                        <option value="high">Высокий</option>
-                        <option value="medium">Средний</option>
-                        <option value="low">Низкий</option>
-                    </select>
+                    <div class="actions">
+                        <button class="btn-sync" id="syncBtn">Синхронизация</button>
+                        <button class="btn-primary" id="addTicketBtn">Новая заявка</button>
+                    </div>
                 </div>
-                
-                <button id="syncBtn" class="sync-btn" disabled>
-                    Синхронизация
-                </button>
-            </div>
 
-            <div class="tickets-container">
-                <div class="tickets-header">
-                    <h2>Список заявок</h2>
-                    <button id="addTicketBtn" class="btn-primary">
-                        + Новая заявка
-                    </button>
-                </div>
-                
-                <div id="ticketsList" class="tickets-list">
+                <div class="tickets-section">
+                    <div class="section-header">
+                        <h2>Список заявок</h2>
+                        <span class="tickets-count" id="ticketsCount">0</span>
+                    </div>
+                    
+                    <div id="ticketsList" class="tickets-list"></div>
                 </div>
             </div>
         </main>
@@ -63,34 +66,43 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="modalTitle">Создание заявки</h3>
-                <button class="modal-close">&times;</button>
+                <button class="modal-close" id="modalCloseBtn">&times;</button>
             </div>
             <form id="ticketForm">
                 <input type="hidden" id="ticketId">
+                
                 <div class="form-group">
-                    <label for="title">Название *</label>
-                    <input type="text" id="title" required minlength="3" placeholder="Краткое описание проблемы">
+                    <label for="title">Название заявки</label>
+                    <input type="text" id="title" placeholder="Например: Сломалась мышь" required>
+                    <small>Минимум 3 символа</small>
                 </div>
+                
                 <div class="form-group">
-                    <label for="description">Описание *</label>
-                    <textarea id="description" required minlength="10" rows="4" placeholder="Подробное описание..."></textarea>
+                    <label for="description">Описание</label>
+                    <textarea id="description" rows="4" placeholder="Опишите проблему подробно..." required></textarea>
+                    <small>Минимум 10 символов</small>
                 </div>
-                <div class="form-group">
-                    <label for="priority">Приоритет *</label>
-                    <select id="priority" required>
-                        <option value="low">Низкий</option>
-                        <option value="medium" selected>Средний</option>
-                        <option value="high">Высокий</option>
-                    </select>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="priority">Приоритет</label>
+                        <select id="priority">
+                            <option value="low">Низкий</option>
+                            <option value="medium" selected>Средний</option>
+                            <option value="high">Высокий</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="status">Статус</label>
+                        <select id="status">
+                            <option value="new">Новая</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="completed">Завершена</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="status">Статус</label>
-                    <select id="status">
-                        <option value="new">Новая</option>
-                        <option value="in_progress">В работе</option>
-                        <option value="completed">Завершена</option>
-                    </select>
-                </div>
+                
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary" id="cancelModalBtn">Отмена</button>
                     <button type="submit" class="btn-primary">Сохранить</button>

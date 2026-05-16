@@ -1,160 +1,238 @@
 let tickets = [];
-let offlineQueue = [];
-let isOnline = navigator.onLine;
+let isOnline = false;
+let syncInProgress = false;
+let onlineCheckInterval = null;
 
 const ticketsList = document.getElementById('ticketsList');
 const statusFilter = document.getElementById('statusFilter');
 const priorityFilter = document.getElementById('priorityFilter');
 const syncBtn = document.getElementById('syncBtn');
 const addTicketBtn = document.getElementById('addTicketBtn');
+const ticketsCount = document.getElementById('ticketsCount');
 const modal = document.getElementById('ticketModal');
 const ticketForm = document.getElementById('ticketForm');
 const modalTitle = document.getElementById('modalTitle');
 const cancelModalBtn = document.getElementById('cancelModalBtn');
-const statusIndicator = document.getElementById('statusIndicator');
+const modalCloseBtn = document.getElementById('modalCloseBtn');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = '/api';
 
 async function init() {
-    await loadFromLocalStorage();
+    loadFromLocalStorage();
     await loadFromServer();
     setupEventListeners();
     setupNetworkListeners();
     updateUI();
-    checkPendingSync();
+    await checkAndUpdateOnlineStatus();
+    startPeriodicOnlineCheck();
 }
 
-async function loadFromLocalStorage() {
-    const savedTickets = localStorage.getItem('tickets');
-    const savedQueue = localStorage.getItem('offlineQueue');
-    
-    if (savedTickets) {
-        tickets = JSON.parse(savedTickets);
-        console.log('Загружено из localStorage:', tickets.length, 'заявок');
-    } else {
-        tickets = [];
+async function checkRealOnlineStatus() {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch(`${API_URL}/tickets`, {
+            method: 'HEAD',
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        return response.ok || response.status < 500;
+    } catch (error) {
+        return false;
     }
+}
+
+async function checkAndUpdateOnlineStatus() {
+    const nowOnline = await checkRealOnlineStatus();
     
-    if (savedQueue) {
-        offlineQueue = JSON.parse(savedQueue);
+    if (isOnline !== nowOnline) {
+        isOnline = nowOnline;
+        updateOnlineStatusUI();
+        
+        if (isOnline) {
+            showNotification('Интернет появился', 'success');
+            await loadFromServer();
+            updateUI();
+        } else {
+            showNotification('Интернет пропал. Работаем офлайн', 'warning');
+        }
+    }
+    return isOnline;
+}
+
+function startPeriodicOnlineCheck() {
+    if (onlineCheckInterval) clearInterval(onlineCheckInterval);
+    onlineCheckInterval = setInterval(async () => {
+        await checkAndUpdateOnlineStatus();
+    }, 5000);
+}
+
+function updateOnlineStatusUI() {
+    if (statusDot && statusText) {
+        if (isOnline) {
+            statusDot.className = 'status-dot online';
+            statusText.textContent = 'Онлайн';
+            if (syncBtn) syncBtn.disabled = false;
+        } else {
+            statusDot.className = 'status-dot offline';
+            statusText.textContent = 'Офлайн';
+            if (syncBtn) syncBtn.disabled = true;
+        }
+    }
+}
+
+function setupNetworkListeners() {
+    window.addEventListener('online', async () => {
+        await checkAndUpdateOnlineStatus();
+    });
+    
+    window.addEventListener('offline', () => {
+        isOnline = false;
+        updateOnlineStatusUI();
+        showNotification('Интернет пропал', 'warning');
+    });
+}
+
+function loadFromLocalStorage() {
+    const saved = localStorage.getItem('tickets');
+    if (saved) {
+        try {
+            tickets = JSON.parse(saved);
+        } catch (e) {
+            tickets = [];
+        }
     }
 }
 
 function saveToLocalStorage() {
     localStorage.setItem('tickets', JSON.stringify(tickets));
-    localStorage.setItem('offlineQueue', JSON.stringify(offlineQueue));
-    console.log('Сохранено в localStorage:', tickets.length, 'заявок');
 }
 
 async function loadFromServer() {
     if (!isOnline) return;
     
     try {
-        console.log('Загрузка с сервера...');
         const response = await fetch(`${API_URL}/tickets`);
+        
         if (response.ok) {
             const serverTickets = await response.json();
-            console.log('Загружено с сервера:', serverTickets.length, 'заявок');
             
-            const mergedTickets = [...serverTickets];
+            const mergedTickets = [];
+            const processedIds = new Set();
+            
+            for (const serverTicket of serverTickets) {
+                mergedTickets.push({
+                    ...serverTicket,
+                    synced: true
+                });
+                processedIds.add(serverTicket.id);
+            }
             
             for (const localTicket of tickets) {
-                if (!localTicket.synced) {
-                    mergedTickets.push(localTicket);
-                }
+                if (localTicket.synced) continue;
+                if (processedIds.has(localTicket.id)) continue;
+                
+                mergedTickets.push({
+                    ...localTicket,
+                    synced: false
+                });
             }
+            
+            mergedTickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             tickets = mergedTickets;
             saveToLocalStorage();
             updateUI();
         }
     } catch (error) {
-        console.log('Не удалось загрузить с сервера:', error.message);
+        console.error('Load error:', error);
     }
 }
 
 async function syncWithServer() {
     if (!isOnline) {
-        showNotification('Нет соединения с интернетом', 'warning');
+        showNotification('Нет соединения с интернетом', 'error');
         return;
     }
     
+    if (syncInProgress) {
+        showNotification('Синхронизация уже выполняется', 'info');
+        return;
+    }
+    
+    const unsyncedTickets = tickets.filter(t => !t.synced && t.id.startsWith('local_'));
+    
+    if (unsyncedTickets.length === 0) {
+        showNotification('Нет заявок для синхронизации', 'info');
+        return;
+    }
+    
+    syncInProgress = true;
     syncBtn.disabled = true;
     syncBtn.textContent = 'Синхронизация...';
     
-    try {
-        const unsyncedTickets = tickets.filter(t => !t.synced);
-        
-        if (unsyncedTickets.length === 0) {
-            showNotification('Нет данных для синхронизации', 'info');
-            return;
-        }
-        
-        console.log('Начинаем синхронизацию:', unsyncedTickets.length, 'заявок');
-        
-        let successCount = 0;
-        let errorCount = 0;
-        
-        for (const localTicket of unsyncedTickets) {
-            try {
-                console.log(`Синхронизация: ${localTicket.title}`);
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (const localTicket of unsyncedTickets) {
+        try {
+            const response = await fetch(`${API_URL}/tickets`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: localTicket.title,
+                    description: localTicket.description,
+                    priority: localTicket.priority
+                })
+            });
+            
+            if (response.ok) {
+                const serverTicket = await response.json();
                 
-                const response = await fetch(`${API_URL}/tickets`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id: localTicket.id,
-                        title: localTicket.title,
-                        description: localTicket.description,
-                        priority: localTicket.priority
-                    })
-                });
-                
-                if (response.ok) {
-                    const serverTicket = await response.json();
-                    console.log(`Синхронизировано: ${serverTicket.id}`);
-                    
-                    const index = tickets.findIndex(t => t.id === localTicket.id);
-                    if (index !== -1) {
-                        tickets[index] = {
-                            ...serverTicket,
-                            synced: true
-                        };
-                    }
-                    successCount++;
-                } else {
-                    const error = await response.json();
-                    console.error(`Ошибка ${localTicket.id}:`, error);
-                    errorCount++;
+                const localIndex = tickets.findIndex(t => t.id === localTicket.id);
+                if (localIndex !== -1) {
+                    tickets[localIndex] = {
+                        ...serverTicket,
+                        synced: true
+                    };
                 }
-            } catch (err) {
-                console.error(`Ошибка синхронизации ${localTicket.id}:`, err.message);
+                successCount++;
+            } else {
                 errorCount++;
             }
+        } catch (error) {
+            errorCount++;
         }
-        
-        saveToLocalStorage();
-        updateUI();
-        
-        if (errorCount === 0) {
-            showNotification(`Синхронизировано ${successCount} заявок`, 'success');
-        } else {
-            showNotification(`Синхронизировано ${successCount}, ошибок: ${errorCount}`, 'warning');
-        }
-        
-    } catch (error) {
-        console.error('Критическая ошибка:', error);
-        showNotification('Ошибка синхронизации', 'error');
-    } finally {
-        syncBtn.disabled = false;
-        syncBtn.textContent = 'Синхронизация';
     }
+    
+    saveToLocalStorage();
+    updateUI();
+    
+    if (errorCount === 0) {
+        showNotification(`Синхронизировано ${successCount} заявок`, 'success');
+    } else {
+        showNotification(`Синхронизировано ${successCount}, ошибок: ${errorCount}`, 'warning');
+    }
+    
+    syncInProgress = false;
+    syncBtn.disabled = false;
+    syncBtn.textContent = 'Синхронизация';
+    
+    await loadFromServer();
 }
 
-async function createTicket(ticketData) {
+async function createTicket(data) {
+    const localId = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
     const newTicket = {
-        id: Date.now().toString(),
-        ...ticketData,
+        id: localId,
+        title: data.title.trim(),
+        description: data.description.trim(),
+        priority: data.priority,
         status: 'new',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -164,76 +242,116 @@ async function createTicket(ticketData) {
     tickets.unshift(newTicket);
     saveToLocalStorage();
     updateUI();
-    
-    showNotification('Заявка создана', 'success');
+    showNotification('Заявка сохранена локально', 'success');
     
     if (isOnline) {
         await syncWithServer();
-    } else {
-        showNotification('Заявка сохранена локально. Синхронизируется при появлении интернета.', 'info');
     }
 }
 
-async function updateTicket(id, updates) {
+async function updateTicket(id, data) {
     const index = tickets.findIndex(t => t.id === id);
     if (index === -1) return;
     
-    tickets[index] = {
-        ...tickets[index],
-        ...updates,
-        updatedAt: new Date().toISOString(),
-        synced: false
-    };
+    const isLocalTicket = id.startsWith('local_');
     
-    saveToLocalStorage();
-    updateUI();
-    
-    if (isOnline) {
-        await syncWithServer();
+    if (isLocalTicket) {
+        tickets[index] = {
+            ...tickets[index],
+            title: data.title.trim(),
+            description: data.description.trim(),
+            priority: data.priority,
+            status: data.status,
+            updatedAt: new Date().toISOString(),
+            synced: false
+        };
+        saveToLocalStorage();
+        updateUI();
+        showNotification('Локальная заявка обновлена', 'success');
+        
+        if (isOnline) {
+            await syncWithServer();
+        }
+    } else {
+        if (isOnline) {
+            try {
+                const response = await fetch(`${API_URL}/tickets/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                if (response.ok) {
+                    const updatedTicket = await response.json();
+                    tickets[index] = { ...updatedTicket, synced: true };
+                    saveToLocalStorage();
+                    updateUI();
+                    showNotification('Заявка обновлена', 'success');
+                } else {
+                    showNotification('Ошибка обновления', 'error');
+                }
+            } catch (error) {
+                tickets[index] = {
+                    ...tickets[index],
+                    ...data,
+                    updatedAt: new Date().toISOString(),
+                    synced: false
+                };
+                saveToLocalStorage();
+                updateUI();
+                showNotification('Изменения сохранены локально', 'info');
+            }
+        } else {
+            tickets[index] = {
+                ...tickets[index],
+                ...data,
+                updatedAt: new Date().toISOString(),
+                synced: false
+            };
+            saveToLocalStorage();
+            updateUI();
+            showNotification('Изменения сохранены локально', 'info');
+        }
     }
 }
 
 async function deleteTicket(id) {
     if (!confirm('Вы уверены, что хотите удалить заявку?')) return;
     
-    const ticket = tickets.find(t => t.id === id);
+    const index = tickets.findIndex(t => t.id === id);
+    if (index === -1) return;
     
-    tickets = tickets.filter(t => t.id !== id);
-    saveToLocalStorage();
-    updateUI();
+    const isLocalTicket = id.startsWith('local_');
     
-    if (isOnline && ticket && ticket.synced) {
+    if (!isLocalTicket && isOnline) {
         try {
             await fetch(`${API_URL}/tickets/${id}`, { method: 'DELETE' });
+            tickets.splice(index, 1);
+            saveToLocalStorage();
+            updateUI();
             showNotification('Заявка удалена', 'success');
         } catch (error) {
-            console.error('Ошибка удаления:', error);
+            showNotification('Ошибка удаления', 'error');
         }
     } else {
-        showNotification('Заявка удалена локально', 'success');
+        tickets.splice(index, 1);
+        saveToLocalStorage();
+        updateUI();
+        showNotification('Заявка удалена', 'success');
     }
-}
-
-function getFilteredTickets() {
-    const statusValue = statusFilter.value;
-    const priorityValue = priorityFilter.value;
-    
-    return tickets.filter(ticket => {
-        const statusMatch = statusValue === 'all' || ticket.status === statusValue;
-        const priorityMatch = priorityValue === 'all' || ticket.priority === priorityValue;
-        return statusMatch && priorityMatch;
-    });
 }
 
 function updateUI() {
     const filtered = getFilteredTickets();
+    ticketsCount.textContent = filtered.length;
     
     if (filtered.length === 0) {
         ticketsList.innerHTML = `
             <div class="empty-state">
-                <p>Нет заявок</p>
+                <div class="empty-state-icon"></div>
+                <p>У вас пока нет заявок</p>
                 <button class="btn-primary" onclick="document.getElementById('addTicketBtn').click()">
-                    + Создать первую заявку
+                    Создать первую заявку
                 </button>
             </div>
         `;
@@ -251,7 +369,7 @@ function updateUI() {
                     <span class="badge badge-status-${ticket.status}">
                         ${getStatusText(ticket.status)}
                     </span>
-                    ${!ticket.synced ? '<span class="badge" style="background:#FEF3C7;color:#D97706;">Локально</span>' : ''}
+                    ${!ticket.synced ? '<span class="badge badge-offline">Офлайн</span>' : ''}
                 </div>
             </div>
             <div class="ticket-description">
@@ -259,15 +377,26 @@ function updateUI() {
             </div>
             <div class="ticket-meta">
                 <div class="ticket-date">
-                    ${new Date(ticket.createdAt).toLocaleString('ru-RU')}
+                    ${formatDate(ticket.createdAt)}
                 </div>
                 <div class="ticket-actions">
                     <button class="btn-secondary" onclick="editTicket('${ticket.id}')">Редактировать</button>
-                    <button class="btn-danger" onclick="deleteTicket('${ticket.id}')">Удалить</button>
+                    <button class="btn-secondary" onclick="deleteTicket('${ticket.id}')">Удалить</button>
                 </div>
             </div>
         </div>
     `).join('');
+}
+
+function getFilteredTickets() {
+    const statusValue = statusFilter.value;
+    const priorityValue = priorityFilter.value;
+    
+    return tickets.filter(ticket => {
+        const statusMatch = statusValue === 'all' || ticket.status === statusValue;
+        const priorityMatch = priorityValue === 'all' || ticket.priority === priorityValue;
+        return statusMatch && priorityMatch;
+    });
 }
 
 function getPriorityText(priority) {
@@ -280,33 +409,55 @@ function getStatusText(status) {
     return map[status] || status;
 }
 
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
 }
 
-function editTicket(id) {
-    const ticket = tickets.find(t => t.id === id);
-    if (!ticket) return;
-    
-    document.getElementById('ticketId').value = ticket.id;
-    document.getElementById('title').value = ticket.title;
-    document.getElementById('description').value = ticket.description;
-    document.getElementById('priority').value = ticket.priority;
-    document.getElementById('status').value = ticket.status;
-    modalTitle.textContent = 'Редактирование заявки';
+function openModal(ticketId = null) {
+    if (ticketId) {
+        const ticket = tickets.find(t => t.id === ticketId);
+        if (ticket) {
+            document.getElementById('ticketId').value = ticket.id;
+            document.getElementById('title').value = ticket.title;
+            document.getElementById('description').value = ticket.description;
+            document.getElementById('priority').value = ticket.priority;
+            document.getElementById('status').value = ticket.status;
+            modalTitle.textContent = 'Редактирование заявки';
+        }
+    } else {
+        document.getElementById('ticketId').value = '';
+        document.getElementById('title').value = '';
+        document.getElementById('description').value = '';
+        document.getElementById('priority').value = 'medium';
+        document.getElementById('status').value = 'new';
+        modalTitle.textContent = 'Новая заявка';
+    }
     modal.classList.add('active');
 }
 
+function closeModal() {
+    modal.classList.remove('active');
+}
+
+function editTicket(id) {
+    openModal(id);
+}
+
 function addTicket() {
-    document.getElementById('ticketId').value = '';
-    document.getElementById('title').value = '';
-    document.getElementById('description').value = '';
-    document.getElementById('priority').value = 'medium';
-    document.getElementById('status').value = 'new';
-    modalTitle.textContent = 'Создание заявки';
-    modal.classList.add('active');
+    openModal();
 }
 
 ticketForm.addEventListener('submit', async (e) => {
@@ -319,118 +470,61 @@ ticketForm.addEventListener('submit', async (e) => {
     const status = document.getElementById('status').value;
     
     if (!title || title.length < 3) {
-        alert('Название должно содержать минимум 3 символа');
+        showNotification('Название должно содержать минимум 3 символа', 'error');
         return;
     }
     
     if (!description || description.length < 10) {
-        alert('Описание должно содержать минимум 10 символов');
+        showNotification('Описание должно содержать минимум 10 символов', 'error');
         return;
     }
     
     if (id) {
         await updateTicket(id, { title, description, priority, status });
-        showNotification('Заявка обновлена', 'success');
     } else {
         await createTicket({ title, description, priority });
     }
     
-    modal.classList.remove('active');
-});
-
-function closeModal() {
-    modal.classList.remove('active');
-}
-
-if (cancelModalBtn) cancelModalBtn.addEventListener('click', closeModal);
-const modalClose = document.querySelector('.modal-close');
-if (modalClose) modalClose.addEventListener('click', closeModal);
-if (modal) modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeModal();
+    closeModal();
 });
 
 function setupEventListeners() {
-    if (statusFilter) statusFilter.addEventListener('change', updateUI);
-    if (priorityFilter) priorityFilter.addEventListener('change', updateUI);
-    if (addTicketBtn) addTicketBtn.addEventListener('click', addTicket);
-    if (syncBtn) syncBtn.addEventListener('click', syncWithServer);
-}
-
-function setupNetworkListeners() {
-    window.addEventListener('online', () => {
-        console.log('Интернет появился');
-        isOnline = true;
-        updateOnlineStatus();
-        checkPendingSync();
-    });
-    
-    window.addEventListener('offline', () => {
-        console.log('Интернет пропал');
-        isOnline = false;
-        updateOnlineStatus();
+    statusFilter.addEventListener('change', updateUI);
+    priorityFilter.addEventListener('change', updateUI);
+    addTicketBtn.addEventListener('click', addTicket);
+    syncBtn.addEventListener('click', syncWithServer);
+    cancelModalBtn.addEventListener('click', closeModal);
+    modalCloseBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
     });
 }
 
-function updateOnlineStatus() {
-    const statusDot = document.querySelector('.status-dot');
-    const statusText = document.querySelector('.status-text');
-    
-    if (!statusDot || !statusText) return;
-    
-    if (isOnline) {
-        statusDot.className = 'status-dot online';
-        statusText.textContent = 'Онлайн';
-        if (syncBtn) syncBtn.disabled = false;
-    } else {
-        statusDot.className = 'status-dot offline';
-        statusText.textContent = 'Офлайн';
-        if (syncBtn) syncBtn.disabled = true;
-    }
-}
-
-async function checkPendingSync() {
-    if (isOnline && tickets.some(t => !t.synced)) {
-        console.log('Обнаружены несинхронизированные заявки, запускаем синхронизацию...');
-        await syncWithServer();
-    }
-}
-
-function showNotification(message, type) {
+function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.textContent = message;
-    const bgColor = type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : type === 'warning' ? '#F59E0B' : '#3B82F6';
     notification.className = 'notification';
-    notification.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        padding: 12px 20px;
-        background: ${bgColor};
-        color: white;
-        border-radius: 12px;
-        z-index: 2000;
-        animation: slideInRight 0.3s ease;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        font-size: 14px;
-        font-weight: 500;
-    `;
+    notification.textContent = message;
     
+    const colors = {
+        success: '#10B981',
+        error: '#EF4444',
+        warning: '#F59E0B',
+        info: '#6366F1'
+    };
+    
+    notification.style.background = colors[type] || colors.info;
     document.body.appendChild(notification);
+    
     setTimeout(() => {
-        notification.remove();
-    }, 3000);
+        notification.style.animation = 'slideInRight 0.3s reverse';
+        setTimeout(() => notification.remove(), 300);
+    }, 4000);
 }
-
-updateOnlineStatus();
-
-init();
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
-        .then(registration => {
-            console.log('Service Worker зарегистрирован');
-        })
-        .catch(error => {
-            console.log('Service Worker не зарегистрирован:', error);
-        });
+        .then(reg => console.log('Service Worker registered'))
+        .catch(err => console.error('SW error:', err));
 }
+
+init();
