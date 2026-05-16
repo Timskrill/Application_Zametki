@@ -4,17 +4,12 @@
   "description": "Приложение для управления заявками с офлайн-режимом",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#4F46E5",
+  "theme_color": "#F59E0B",
   "background_color": "#ffffff",
   "icons": [
     {
-      "src": "https://via.placeholder.com/192x192?text=TS",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "https://via.placeholder.com/512x512?text=TS",
-      "sizes": "512x512",
+      "src": "icon.png",
+      "sizes": "225x225",
       "type": "image/png"
     }
   ]

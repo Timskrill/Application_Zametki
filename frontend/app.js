@@ -31,6 +31,8 @@ async function loadFromLocalStorage() {
     if (savedTickets) {
         tickets = JSON.parse(savedTickets);
         console.log('Загружено из localStorage:', tickets.length, 'заявок');
+    } else {
+        tickets = [];
     }
     
     if (savedQueue) {
@@ -41,6 +43,7 @@ async function loadFromLocalStorage() {
 function saveToLocalStorage() {
     localStorage.setItem('tickets', JSON.stringify(tickets));
     localStorage.setItem('offlineQueue', JSON.stringify(offlineQueue));
+    console.log('Сохранено в localStorage:', tickets.length, 'заявок');
 }
 
 async function loadFromServer() {
@@ -53,37 +56,26 @@ async function loadFromServer() {
             const serverTickets = await response.json();
             console.log('Загружено с сервера:', serverTickets.length, 'заявок');
             
-            const mergedTickets = mergeTickets(tickets, serverTickets);
+            const mergedTickets = [...serverTickets];
+            
+            for (const localTicket of tickets) {
+                if (!localTicket.synced) {
+                    mergedTickets.push(localTicket);
+                }
+            }
+            
             tickets = mergedTickets;
             saveToLocalStorage();
             updateUI();
         }
     } catch (error) {
-        console.log('Не удалось загрузить с сервера:', error);
+        console.log('Не удалось загрузить с сервера:', error.message);
     }
-}
-
-function mergeTickets(localTickets, serverTickets) {
-    const merged = [...serverTickets];
-    
-    for (const localTicket of localTickets) {
-        const existingIndex = merged.findIndex(t => t.id === localTicket.id);
-        
-        if (existingIndex === -1 && !localTicket.synced) {
-            merged.push(localTicket);
-        } else if (existingIndex !== -1 && !localTicket.synced) {
-            if (localTicket.updatedAt > merged[existingIndex].updatedAt) {
-                merged[existingIndex] = localTicket;
-            }
-        }
-    }
-    
-    return merged;
 }
 
 async function syncWithServer() {
     if (!isOnline) {
-        showNotification('Нет соединения с интернетом. Заявки будут синхронизированы позже.', 'warning');
+        showNotification('Нет соединения с интернетом', 'warning');
         return;
     }
     
@@ -103,35 +95,40 @@ async function syncWithServer() {
         let successCount = 0;
         let errorCount = 0;
         
-        for (const ticket of unsyncedTickets) {
+        for (const localTicket of unsyncedTickets) {
             try {
-                console.log(`Синхронизация заявки ${ticket.id}: ${ticket.title}`);
+                console.log(`Синхронизация: ${localTicket.title}`);
                 
                 const response = await fetch(`${API_URL}/tickets`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        title: ticket.title,
-                        description: ticket.description,
-                        priority: ticket.priority
+                        id: localTicket.id,
+                        title: localTicket.title,
+                        description: localTicket.description,
+                        priority: localTicket.priority
                     })
                 });
                 
                 if (response.ok) {
-                    const updatedTicket = await response.json();
-                    const index = tickets.findIndex(t => t.id === ticket.id);
+                    const serverTicket = await response.json();
+                    console.log(`Синхронизировано: ${serverTicket.id}`);
+                    
+                    const index = tickets.findIndex(t => t.id === localTicket.id);
                     if (index !== -1) {
-                        tickets[index] = { ...updatedTicket, synced: true };
+                        tickets[index] = {
+                            ...serverTicket,
+                            synced: true
+                        };
                     }
                     successCount++;
-                    console.log(`Заявка ${ticket.id} синхронизирована`);
                 } else {
                     const error = await response.json();
-                    console.error(`Ошибка ${ticket.id}:`, error);
+                    console.error(`Ошибка ${localTicket.id}:`, error);
                     errorCount++;
                 }
             } catch (err) {
-                console.error(`Ошибка при синхронизации ${ticket.id}:`, err);
+                console.error(`Ошибка синхронизации ${localTicket.id}:`, err.message);
                 errorCount++;
             }
         }
@@ -146,8 +143,8 @@ async function syncWithServer() {
         }
         
     } catch (error) {
-        console.error('Критическая ошибка синхронизации:', error);
-        showNotification('Ошибка синхронизации: ' + error.message, 'error');
+        console.error('Критическая ошибка:', error);
+        showNotification('Ошибка синхронизации', 'error');
     } finally {
         syncBtn.disabled = false;
         syncBtn.textContent = 'Синхронизация';
@@ -168,10 +165,12 @@ async function createTicket(ticketData) {
     saveToLocalStorage();
     updateUI();
     
+    showNotification('Заявка создана', 'success');
+    
     if (isOnline) {
         await syncWithServer();
     } else {
-        showNotification('Заявка сохранена локально. Будет синхронизирована при появлении интернета.', 'info');
+        showNotification('Заявка сохранена локально. Синхронизируется при появлении интернета.', 'info');
     }
 }
 
@@ -197,17 +196,21 @@ async function updateTicket(id, updates) {
 async function deleteTicket(id) {
     if (!confirm('Вы уверены, что хотите удалить заявку?')) return;
     
+    const ticket = tickets.find(t => t.id === id);
+    
     tickets = tickets.filter(t => t.id !== id);
     saveToLocalStorage();
     updateUI();
     
-    if (isOnline) {
+    if (isOnline && ticket && ticket.synced) {
         try {
             await fetch(`${API_URL}/tickets/${id}`, { method: 'DELETE' });
             showNotification('Заявка удалена', 'success');
         } catch (error) {
-            console.error('Ошибка удаления на сервере:', error);
+            console.error('Ошибка удаления:', error);
         }
+    } else {
+        showNotification('Заявка удалена локально', 'success');
     }
 }
 
@@ -230,7 +233,7 @@ function updateUI() {
             <div class="empty-state">
                 <p>Нет заявок</p>
                 <button class="btn-primary" onclick="document.getElementById('addTicketBtn').click()">
-                    Создать первую заявку
+                    + Создать первую заявку
                 </button>
             </div>
         `;
@@ -327,6 +330,7 @@ ticketForm.addEventListener('submit', async (e) => {
     
     if (id) {
         await updateTicket(id, { title, description, priority, status });
+        showNotification('Заявка обновлена', 'success');
     } else {
         await createTicket({ title, description, priority });
     }
@@ -354,12 +358,14 @@ function setupEventListeners() {
 
 function setupNetworkListeners() {
     window.addEventListener('online', () => {
+        console.log('Интернет появился');
         isOnline = true;
         updateOnlineStatus();
         checkPendingSync();
     });
     
     window.addEventListener('offline', () => {
+        console.log('Интернет пропал');
         isOnline = false;
         updateOnlineStatus();
     });
@@ -393,6 +399,7 @@ function showNotification(message, type) {
     const notification = document.createElement('div');
     notification.textContent = message;
     const bgColor = type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : type === 'warning' ? '#F59E0B' : '#3B82F6';
+    notification.className = 'notification';
     notification.style.cssText = `
         position: fixed;
         bottom: 20px;
@@ -400,10 +407,10 @@ function showNotification(message, type) {
         padding: 12px 20px;
         background: ${bgColor};
         color: white;
-        border-radius: 8px;
+        border-radius: 12px;
         z-index: 2000;
-        animation: slideIn 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        animation: slideInRight 0.3s ease;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         font-size: 14px;
         font-weight: 500;
     `;
@@ -421,9 +428,9 @@ init();
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
         .then(registration => {
-            console.log('Service Worker зарегистрирован:', registration);
+            console.log('Service Worker зарегистрирован');
         })
         .catch(error => {
-            console.log('Ошибка регистрации Service Worker:', error);
+            console.log('Service Worker не зарегистрирован:', error);
         });
 }
