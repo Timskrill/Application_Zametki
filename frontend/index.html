@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Выездной специалист - Заявки</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#4F46E5">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <div class="header-content">
+                <h1>Заявки</h1>
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot offline"></span>
+                    <span class="status-text">Офлайн</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="toolbar">
+                <div class="filters">
+                    <select id="statusFilter" class="filter-select">
+                        <option value="all">Все статусы</option>
+                        <option value="new">Новые</option>
+                        <option value="in_progress">В работе</option>
+                        <option value="completed">Завершенные</option>
+                    </select>
+                    
+                    <select id="priorityFilter" class="filter-select">
+                        <option value="all">Все приоритеты</option>
+                        <option value="high">Высокий</option>
+                        <option value="medium">Средний</option>
+                        <option value="low">Низкий</option>
+                    </select>
+                </div>
+                
+                <button id="syncBtn" class="sync-btn" disabled>
+                    Синхронизация
+                </button>
+            </div>
+
+            <div class="tickets-container">
+                <div class="tickets-header">
+                    <h2>Список заявок</h2>
+                    <button id="addTicketBtn" class="btn-primary">
+                        + Новая заявка
+                    </button>
+                </div>
+                
+                <div id="ticketsList" class="tickets-list">
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="ticketModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Создание заявки</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="ticketForm">
+                <input type="hidden" id="ticketId">
+                <div class="form-group">
+                    <label for="title">Название *</label>
+                    <input type="text" id="title" required minlength="3" placeholder="Краткое описание проблемы">
+                </div>
+                <div class="form-group">
+                    <label for="description">Описание *</label>
+                    <textarea id="description" required minlength="10" rows="4" placeholder="Подробное описание..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="priority">Приоритет *</label>
+                    <select id="priority" required>
+                        <option value="low">Низкий</option>
+                        <option value="medium" selected>Средний</option>
+                        <option value="high">Высокий</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="status">Статус</label>
+                    <select id="status">
+                        <option value="new">Новая</option>
+                        <option value="in_progress">В работе</option>
+                        <option value="completed">Завершена</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancelModalBtn">Отмена</button>
+                    <button type="submit" class="btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
